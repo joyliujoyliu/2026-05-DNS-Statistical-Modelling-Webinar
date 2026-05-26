@@ -1,0 +1,837 @@
+---
+title: "Data Analysis Workshop-Predicting Penguin Body Mass"
+author: "Joy Liu"
+date: "2026-05-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## 1. Introduction
+
+In this analysis, we aim to predict penguin body mass (*body_mass_g*) using morphological measurements such as bill length, bill depth, and flipper length from the palmerpenguins dataset. Understanding variation in body mass is important because it reflects ecological adaptation, foraging ability, and energetic constraints across species living in different environmental conditions.
+
+The dataset includes three penguin species—Adelie, Chinstrap, and Gentoo (see Figure 1)—which differ in body size and morphology. These species are sampled from three islands in the Palmer Archipelago (Biscoe, Dream, and Torgersen; see Figure 2), a region in Antarctica where environmental conditions and habitat characteristics vary spatially.
+
+We will use statistical modelling approaches, including multiple linear regression and potentially generalized linear mixed models, to quantify the relationship between body mass and morphological predictors. The goal is to build an interpretable model that explains variation in body mass while allowing meaningful ecological interpretation of each predictor.
+
+
+Overall, this analysis aims not only to produce accurate predictions of body mass but also to provide ecological insight into how morphology and habitat jointly shape penguin body condition.
+
+
+```{r, echo= FALSE}
+
+# Load Libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(palmerpenguins)
+library(ggthemes)
+library(GGally)
+library(corrplot)
+library(gridExtra)
+library(maps)
+library(glmmTMB)
+library(see)
+library(rsample)
+library(purrr)
+library(Metrics)
+```
+
+```{=html}
+<div class="figure" style="text-align:center;">
+
+  <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+
+    <div style="width:32%;">
+      <img src="https://i.natgeofe.com/n/f4f30053-fd3d-40b0-b049-aa55ab492cec/adelie-penguin_01.jpg?wp=1&w=1084.125&h=1624.875" width="100%">
+      <p><strong>(a)</strong> Adelie</p>
+    </div>
+
+    <div style="width:32%;">
+      <img src="https://cdn.britannica.com/08/152708-050-23B255B3/Chinstrap-penguin.jpg" width="100%">
+      <p><strong>(b)</strong> Chinstrap</p>
+    </div>
+
+    <div style="width:32%;">
+      <img src="https://cdn.britannica.com/86/117186-004-D4C509E9/Gentoo-penguin.jpg" width="100%">
+      <p><strong>(c)</strong> Gentoo</p>
+    </div>
+
+  </div>
+
+  <p><strong>Figure 1.</strong> Penguin species comparison: (a) Adelie, (b) Chinstrap, and (c) Gentoo.</p>
+
+</div>
+```
+
+
+
+
+```{r fig2-map, fig.cap="Figure 2. Penguin island sampling locations in the Palmer Archipelago (Biscoe, Dream, and Torgersen Islands).", echo= FALSE}
+islands <- data.frame(
+  island = c("Biscoe", "Dream", "Torgersen"),
+  lon = c(-65.5, -64.8, -64.1),
+  lat = c(-64.8, -64.7, -64.8)
+)
+
+world <- map_data("world")
+
+ggplot() +
+  geom_polygon(data = world,
+               aes(x = long, y = lat, group = group),
+               fill = "gray95", color = "white") +
+  geom_point(data = islands,
+             aes(x = lon, y = lat, color = island),
+             size = 4) +
+  geom_text(data = islands,
+            aes(x = lon, y = lat, label = island),
+            vjust = -1) +
+  coord_quickmap(xlim = c(-70, -60), ylim = c(-66, -63)) +
+  theme_minimal() +
+  labs(title = "Penguin Island Locations (Palmer Archipelago)")
+```
+
+
+
+
+
+
+## 3. Exploratory Data Analysis (EDA)
+
+The data used in this analysis come from the palmerpenguins dataset, which is a simplified and curated version of field observations originally collected as part of ecological research in Antarctica. The measurements were taken on penguin colonies located in the Palmer Archipelago between 2007 and 2009 by researchers from the Palmer Station Long-Term Ecological Research (LTER) program.
+
+Data collection involved direct, on-site biological sampling of wild penguins. Researchers captured individual birds briefly to record physical measurements such as body mass (body_mass_g), flipper length, bill length, and bill depth. Body mass was measured using field scales, while morphological traits were measured using calipers. After measurements were taken, the penguins were released back to their colonies. This hands-on sampling approach is standard in ecological fieldwork but requires careful handling to minimize stress on the animals.
+
+```{r}
+
+# Load Libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(palmerpenguins)
+library(ggthemes)
+library(GGally)
+library(corrplot)
+library(gridExtra)
+library(maps)
+library(glmmTMB)
+library(see)
+library(rsample)
+library(purrr)
+library(Metrics)
+library(performance)
+library(ggeffects)
+```
+
+
+```{r}
+# Load and Clean Data
+penguins  <- penguins %>%
+  drop_na() %>%
+  mutate(year = as.factor(year))
+
+# Note: in general, you need to explain your data wrangling process before EDA. For dealing with missing values, there're many strategies. Here we only have 2 (over 333 observations), we can drop them,
+```
+
+```{r}
+# Summarize Data
+summary(penguins)
+
+```
+
+
+```{=html}
+<div class="figure" style="text-align:center;">
+
+  <div style="display:flex; justify-content:space-around; align-items:flex-start;">
+
+    <div style="width:100%;">
+      <img src="https://media.springernature.com/lw685/springer-static/image/art%3A10.1007%2Fs00300-013-1389-2/MediaObjects/300_2013_1389_Fig2_HTML.gif" style="max-width:100%;">
+      <p><strong>Bill morphology (Valenzuela-Guerra, etc., 2013)</strong></p>
+    </div>
+
+  </div>
+
+  <p><strong>Figure 3.</strong> Penguin morphological predictors.</p>
+
+</div>
+```
+
+
+```{r fig4-response dist, fig.cap="Figure 4. Distribution of Body Mass"}
+# Distribution of Body Mass
+p1 <- ggplot(penguins, aes(x = body_mass_g)) +
+  geom_histogram(aes(y = ..density..),
+                 bins = 30,
+                 fill = "pink",
+                 color = "black") +
+  geom_density(color = "red", linewidth = 1) +
+  labs(title = "Distribution of Body Mass") +
+  theme_minimal()
+p1
+
+
+```
+
+```{r }
+# Body Mass by Species
+p2= ggplot(penguins, aes(x = species, y = body_mass_g, fill = species)) +
+  geom_boxplot() +
+  labs(title = "Body Mass by Species")
+
+# Body Mass by Years
+p3= ggplot(penguins, aes(x = year, y = body_mass_g, fill = year)) +
+  geom_boxplot() +
+  labs(title = "Body Mass by Year", x = "Year") 
+
+# Body Mass by flipper_length
+p4= ggplot(penguins, aes(x = flipper_length_mm, y = body_mass_g)) +
+  geom_point(alpha = 0.6,color = "steelblue") +
+  labs(title = "Body Mass vs Flipper Length",
+       x = "Flipper Length (mm)",
+       y = "Body Mass (g)") +
+  theme_minimal()
+
+# Body Mass by bill_length_mm
+p5= ggplot(penguins, aes(x = bill_length_mm, y = body_mass_g)) +
+  geom_point(alpha = 0.6, color = "darkgreen") +
+  labs(title = "Body Mass vs Bill length",
+       x = "Bill length (mm)",
+       y = "Body Mass (g)") +
+  theme_minimal()
+
+# Body Mass by bill_depth_mm
+p6= ggplot(penguins, aes(x = bill_depth_mm, y = body_mass_g)) +
+  geom_point(alpha = 0.6, color = "purple") +
+  labs(title = "Body Mass vs Bill depth",
+       x = "Bill depth (mm)",
+       y = "Body Mass (g)") +
+  theme_minimal()
+
+# Body Mass by island
+p7=  ggplot(penguins, aes(x = island, y = body_mass_g, fill = island)) +
+  geom_boxplot() +
+  labs(title = "Body Mass by Island") 
+
+
+# Body Mass by sex
+p8=  ggplot(penguins, aes(x = sex, y = body_mass_g, fill = sex)) +
+  geom_boxplot() +
+  labs(title = "Body Mass by Sex") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+
+
+```
+```{r, fig.width=14, fig.height=18 ,fig5-explanatoryvsresponse, fig.cap="Figure 5. Explanatory Varaiables vs Response"}
+grid.arrange(
+  p2, p3,
+  p4, p5, p6,
+  p7, p8,
+  ncol = 2
+)
+```
+
+
+
+
+
+### Correlation Check
+
+```{r fig6-explanatory correlation, fig.cap="Figure 6. Explanatory Multicollinearity"}
+
+numeric_data <- penguins[, c("bill_length_mm",
+                             "bill_depth_mm",
+                             "flipper_length_mm")]
+
+corr_matrix <- cor(numeric_data,
+                   method = "pearson",
+                   use = "pairwise.complete.obs")
+
+corrplot(corr_matrix,
+         method = "color",
+         addCoef.col = "black",
+         mar = c(0,0,3,0),
+         tl.col = "black",
+         tl.cex = 0.8)
+
+title("Morphological Variable Correlations", line = 1)
+
+```
+
+From the initial exploratory data analysis (EDA), we observe that both species and island are imbalanced in the palmerpenguins dataset. For example, only 47 observations come from Torgersen Island, while the majority of penguins are sampled from Biscoe and Dream. This imbalance is important because it can influence model training and evaluation if not properly accounted for.
+
+We also observe that the morphological variables—bill length, bill depth, and flipper length—are measured on different scales. This means that variables with larger numerical ranges could dominate model fitting, especially in methods sensitive to scale (e.g., penalized regression or distance-based approaches). To address this, we standardize the continuous predictors so that each variable has mean 0 and standard deviation 1.
+
+
+From the correlation heatmap (Fig. 6) , we observe no evidence of severe multicollinearity among the continuous morphological predictors, as pairwise correlations remain below the common rule-of-thumb threshold of 0.7. This suggests that bill length, bill depth, and flipper length can reasonably be included together in the modelling framework without major concern for unstable coefficient estimation.
+
+The histogram (Fig. 4) of body mass indicates a moderate right-skewed distribution, suggesting that while linear modelling may still be appropriate, model assumptions related to normality should be carefully evaluated through residual diagnostics.
+
+Scatterplots (Fig. 5) of body mass against bill length, bill depth, and flipper length suggest generally positive relationships, though some predictors may exhibit mild nonlinear patterns. This indicates that simple linear terms may capture much of the variation, but more flexible modelling approaches.
+
+Additionally, visible clustering by species and island suggests the presence of underlying group structure within the data. These grouping effects likely reflect biological and ecological differences among penguin populations and should be accounted for in the model through categorical predictors or hierarchical modelling approaches. 
+
+
+Finally, given the imbalance in both species and island distributions, we will have to use stratified cross-validation to ensure that each fold preserves the underlying class proportions. This helps produce more stable and representative model performance estimates.
+
+
+
+```{r}
+# Data Scaling
+penguins[, c("bill_length_std",
+             "bill_depth_std",
+             "flipper_length_std")] <-
+  scale(penguins[, c("bill_length_mm",
+                     "bill_depth_mm",
+                     "flipper_length_mm")])
+summary(penguins)
+
+```
+
+
+## 4. Model Selection
+
+### Multiple linear regression model:
+
+\begin{align*}
+y = \beta X + \epsilon \\
+y \sim N(\mu,\sigma^2) \\
+
+\end{align*}
+
+
+
+
+```{r}
+model <- lm(body_mass_g ~ bill_length_std + bill_depth_std + flipper_length_std+ species + island + year + sex, data = penguins)
+summary(model)
+```
+
+
+### LM Interpretation:
+
+This multiple linear regression model predicts penguin body mass (body_mass_g) using standardized morphological traits, species, island, year, and sex. Overall, the model performs very well and explains a substantial proportion of variation in body mass.
+
+#### Overall model performance
+
+The model explains approximately 87.7% of the variation in penguin body mass (Multiple R² = 0.8768; Adjusted R² = 0.873), indicating excellent explanatory power. The high F-statistic (229.2, p < 2.2e-16) suggests that the full model is highly significant overall, meaning the included predictors collectively provide strong predictive value compared to a null model.
+
+The residual standard error is approximately 287 g, meaning that, on average, predicted body mass differs from observed values by about 287 grams.
+
+#### Interpretation of R outputs
+
+Intercept: (3820.85 g) represents the predicted body mass for the baseline penguin:
+
+* Adelie species
+* Biscoe Island
+* Year 2007
+* Female
+* Average standardized bill length, bill depth, and flipper length (all = 0)
+
+
+
+##### Continuous standardized morphological variables
+
+Because bill length, bill depth, and flipper length were standardized, each coefficient represents the expected body mass change associated with a one standard deviation increase in that variable.
+
+* Bill length:
+A 1 SD increase in bill length is associated with an average increase of 102.35 g in body mass, holding other variables constant (p = 0.0097).
+* Bill depth:
+A 1 SD increase in bill depth is associated with an average increase of 118.69 g in body mass (p = 0.0030).
+* Flipper length:
+A 1 SD increase in flipper length is associated with an average increase of 261.47 g in body mass (p < 0.001), making it the strongest continuous morphological predictor in the model.
+
+
+##### Discrete variables
+
+* Species effects: Using Adelie penguins as the reference category 
+
+Chinstrap penguins weigh, on average, 281 g less than Adelie penguins after accounting for morphology and other factors (p = 0.0018).
+Gentoo penguins weigh approximately 887 g more than Adelie penguins (p < 0.001), indicating substantial species-level differences.
+
+* Island effects: Using Biscoe Island as the reference 
+
+Dream Island and Torgersen Island do not significantly differ from Biscoe in body mass after controlling for other predictors (p > 0.3).
+
+This suggests that island-specific effects may largely be captured through species and morphology rather than direct location effects.
+
+* Year effects: Using 2007 as the baseline 
+
+Penguins measured in 2008 do not differ significantly from 2007.
+Penguins in 2009 are predicted to weigh about 87 g less than those in 2007 (p = 0.041), though this effect is relatively small.
+
+* Sex effect: Using female penguins as the baseline 
+
+Male penguins weigh approximately 380 g more than females on average (p < 0.001), indicating strong sexual dimorphism.
+
+
+### Residual Plot
+
+```{r }
+plot(model)
+```
+
+```{r}
+penguins$lmresid <- residuals(model)
+
+q1 <- ggplot(penguins, aes(x = bill_length_std, y = lmresid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(title = "Residuals vs Bill Length")
+
+q2 <- ggplot(penguins, aes(x = bill_depth_std, y = lmresid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(title = "Residuals vs Bill Depth")
+
+q3 <- ggplot(penguins, aes(x = flipper_length_std, y = lmresid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(title = "Residuals vs Flipper Length")
+
+q4 <- ggplot(penguins, aes(x = species, y = lmresid)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Residuals vs Species")
+
+q5 <- ggplot(penguins, aes(x = island, y = lmresid)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Residuals vs Island")
+
+q6 <- ggplot(penguins, aes(x = sex, y = lmresid)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Residuals vs Sex")
+
+q7 <- ggplot(penguins, aes(x = factor(year), y = lmresid)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Residuals vs Year")
+```
+
+```{r, fig.width=14, fig.height=18 ,fig7-ResidualDiagnostics, fig.cap="Fig.7. Residual Diagnostics for Linear Model"}
+grid.arrange(
+  q1, q2, q3,
+  q4, q5, q6, q7,
+  ncol = 3,
+  top = "Residual Diagnostics for Linear Model"
+)
+```
+
+
+
+1. Residuals vs Fitted Values
+
+The residuals are generally centered around zero, which is desirable; however, visible clustering patterns appear around certain fitted value ranges rather than a completely random scatter. This suggests that the model may not fully capture underlying subgroup structure in the data, likely due to species or sex differences, and may indicate remaining nonlinear effects or omitted interactions.
+
+2. Normal Q-Q Plot
+
+The Q-Q plot shows that residuals deviate moderately from the reference line in the upper tail, indicating slight right-skewness. While the residual distribution is reasonably close to normal overall, this pattern suggests mild departures from the normality assumption, particularly among larger positive residuals.
+
+3. Scale-Location Plot
+
+The Scale-Location plot also shows clustering rather than uniform spread, suggesting that residual variance may differ across fitted values. This may indicate mild heteroscedasticity, where prediction error is not perfectly constant across all body mass ranges.
+
+4. Residuals vs Leverage Plot
+
+The leverage plot indicates the presence of several observations with relatively high leverage, meaning certain penguins may exert disproportionate influence on coefficient estimates. Additionally, curvature in the trend line suggests potential model misspecification or nonlinear relationships not fully addressed by the current linear structure.
+
+Overall Interpretation
+
+These diagnostics suggest that although the model explains body mass well, there may still be:
+
+* Mild nonlinearity
+* Group-based clustering
+* Slight heteroscedasticity
+* Some influential observations
+
+Practical Implications
+
+The current model remains interpretable and strong, but future improvements could include:
+
+
+* Response variable's distribution and/or link function 
+* Random effect (e.g., species, sex, island)
+ 
+
+
+
+
+### Generalized linear model:
+
+The residual diagnostics and EDA both suggest that the assumption of simple linearity may not fully capture the biological relationship between penguin morphology and body mass. In many biological systems, body mass often follows an allometric scaling relationship with body size, commonly expressed as:
+
+\[
+\log(\text{body mass}) = a \log(\text{body size}) + b
+\]
+
+where *a* represents the scaling exponent and *b* is the intercept. This log-log relationship reflects how mass tends to increase nonlinearly with structural size measurements such as bill length or flipper length.
+
+Because of this biological principle, applying a generalized linear modelling framework with a Gaussian family and log link function may better capture the multiplicative relationship between morphology and body mass while improving model assumptions such as normality and heteroscedasticity.
+
+By modelling body mass on the log scale, we may achieve:
+
+- Improved linearity between predictors and response
+- Reduced right-skewness in residuals
+- More stable variance across fitted values
+- Better biological interpretability through allometric scaling
+
+Therefore, incorporating biologically informed transformations or a GLM with a log link may provide a more appropriate modelling framework for penguin body mass prediction than a standard linear model.
+
+\begin{align*}
+log(y)= \beta log(X) + \epsilon \\
+y \sim N(\mu,\sigma^2)  \\
+
+\end{align*}
+
+
+
+```{r}
+#  Log-transform first, then standardize continuous predictors
+penguins[, c("lg_bill_length_std",
+             "lg_bill_depth_std",
+             "lg_flipper_length_std")] <-
+  scale(log(penguins[, c("bill_length_mm",
+                         "bill_depth_mm",
+                         "flipper_length_mm")]))
+
+
+```
+
+
+```{r}
+
+model2=glmmTMB(body_mass_g ~ lg_bill_length_std + lg_bill_depth_std + lg_flipper_length_std+ species + island + year + sex,family = gaussian(link = "log"), data = penguins)
+
+summary(model2)
+
+```
+
+
+
+
+
+For a Gaussian GLM with a log link:
+
+$$
+\log(E[y]) = X\beta
+$$
+
+Thus:
+
+$$
+E[y] = e^{X\beta}
+$$
+
+#### Key Rule:
+For each coefficient:
+
+$$
+\text{Percent Change} = (e^{\beta} - 1) \times 100
+$$
+
+---
+
+#### Example Coefficient Interpretation
+
+####  Intercept
+```{r}
+exp(8.242914)
+```
+
+
+
+Baseline penguin (reference species, island, year, female, with average predictors) has an expected body mass of approximately **3800 g**.
+
+---
+
+#### Bill Length Effect
+
+```{r}
+(exp(0.025691) - 1) * 100
+```
+
+
+
+A 1-unit increase in standardized log bill length is associated with approximately **2.6% higher expected body mass**.
+
+
+
+
+#### Sex Effect
+
+```{r}
+(exp(0.089862) - 1) * 100
+```
+
+
+Male penguins are expected to weigh approximately **9.4% more** than females.
+
+---
+
+
+
+#### Summary Table
+
+| Variable              | Estimate | Percent Change | Interpretation                            |
+| --------------------- | -------- | -------------- | ----------------------------------------- |
+| lg_bill_length_std    | 0.0257   | +2.6%          | Larger bill length increases body mass    |
+| lg_bill_depth_std     | 0.0290   | +2.9%          | Larger bill depth increases body mass     |
+| lg_flipper_length_std | 0.0575   | +5.9%          | Larger flipper length increases body mass |
+| speciesChinstrap      | -0.0716  | -6.9%          | Lower mass than reference species         |
+| speciesGentoo         | 0.2041   | +22.6%         | Higher mass than reference species        |
+| sexmale               | 0.0899   | +9.4%          | Males heavier than females                |
+| year2009              | -0.0218  | -2.2%          | Slightly lower body mass                  |
+
+---
+
+
+
+
+```{r ,  fig.cap="Fig.8 Residual Diagnostics for GLM", fig.width=14, fig.height=18}
+
+check_model(model2)
+```
+
+#### RQR Plot
+Observation:\
+RQR plot is not perfectly linear and Shows positive tail deviation
+
+Meaning:\
+Model assumptions may not fully match the response distribution\
+Positive tail suggests:\
+right-skewed residuals\
+possible heteroscedasticity\
+Gaussian(log) may underfit heavier upper values\
+
+Potential Solution:\
+Consider Gamma family with log link\
+
+Because Gamma is often better for:\
+positive continuous responses\
+right-skewed body mass–type data\
+variance increasing with mean\
+
+#### High VIF for Species
+Observation:\
+Species variable has elevated VIF\
+
+Meaning:\
+Species may be strongly correlated with morphology predictors
+Possible multicollinearity\
+Species may also represent hierarchical grouping rather than purely fixed explanatory effect\
+
+
+```{r }
+# Body Mass by Species
+
+
+# Body Mass by flipper_length
+t4 <- ggplot(penguins, aes(x = flipper_length_mm,
+                            y = body_mass_g,
+                            color = species)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Body Mass vs Flipper Length among species",
+       x = "Flipper Length (mm)",
+       y = "Body Mass (g)") +
+  theme_minimal()
+
+# Body Mass vs Bill Length
+t5 <- ggplot(penguins, aes(x = bill_length_mm,
+                            y = body_mass_g,
+                            color = species)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Body Mass vs Bill Length among species",
+       x = "Bill Length (mm)",
+       y = "Body Mass (g)") +
+  theme_minimal()
+
+# Body Mass vs Bill Depth
+t6 <- ggplot(penguins, aes(x = bill_depth_mm,
+                            y = body_mass_g,
+                            color = species)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Body Mass vs Bill Depth among species",
+       x = "Bill Depth (mm)",
+       y = "Body Mass (g)") +
+  theme_minimal()
+
+
+
+```
+```{r, fig.width=20, fig.height=14 ,fig9-explanatoryvsresponseamongspecies, fig.cap="Figure 9. Explanatory Varaiables vs Response among species"}
+grid.arrange(
+  
+  t4, t5, t6,
+  ncol = 3
+)
+```
+
+
+
+### Generalized linear mixed model:
+
+
+\begin{align*}
+log(y)= \alpha log(X) + \beta Z +\epsilon \\
+y \sim N(\mu,\sigma^2),  \\
+\beta \sim N(0,\sigma^2)  \\
+\end{align*}
+
+
+X is the fixed effect matrix for variables lg_bill_length_std,lg_bill_depth_std, lg_flipper_length_std, sex, year, island. Z is the random effect matrix for variable species.
+
+```{r}
+
+model3=glmmTMB(body_mass_g ~ lg_bill_length_std + lg_bill_depth_std + lg_flipper_length_std+ + (1 | species) + island + year + sex,family = gaussian(link = "log"), data = penguins)
+
+summary(model3)
+
+```
+
+```{r}
+
+model4=glmmTMB(body_mass_g ~ lg_bill_length_std + lg_bill_depth_std + lg_flipper_length_std+ + (1 | species) + island + year + sex,family = Gamma(link = "log"), data = penguins)
+
+summary(model4)
+
+```
+
+
+
+
+```{r ,  fig.cap="Fig.10 Residual Diagnostics for GLMM (Normal response)", fig.width=14, fig.height=18}
+
+check_model(model3)
+```
+
+```{r ,  fig.cap="Fig.11 Residual Diagnostics for GLMM (Gamma response)", fig.width=14, fig.height=18}
+
+check_model(model4)
+```
+
+```{r, fig.cap="Fig.12 Predicted body mass"}
+ggeffects::ggpredict(model4, terms = c("species"), type = "random") %>% plot()
+```
+
+#### Distribution choice (Gamma vs Gaussian)
+
+Based on diagnostic plots (RQR / residual patterns), the Gamma distribution with log link appears to provide a better fit than the Gaussian model, particularly in handling the right-skewed and heteroscedastic structure of body mass data.
+
+This suggests the response is better modeled as a positive continuous variable with mean–variance dependence, which aligns with biological expectations.
+
+#### Random effect assumption (species)
+
+The random effects diagnostic (Q–Q plot from check_model) shows that species-level random intercepts approximately follow a normal distribution, with no severe deviations.
+
+This indicates the normality assumption for random effects is reasonable, and the grouping structure is statistically valid.
+
+#### Random effect importance (species effect)
+
+The estimated species variance is:
+
+- Variance = 0.01356
+- SD = 0.1164 (log scale)
+
+
+Interpretation:
+Species differ by approximately ±12% in baseline body mass, even after accounting for morphology, sex, year, and island.
+
+
+###  Prediction
+
+```{r}
+set.seed(123)
+folds <- vfold_cv(penguins, v = 3)
+```
+
+```{r}
+# MSPE function
+mspe<- function(actual, pred) {
+ sqrt(mean((actual - pred)^2))
+}
+```
+
+```{r}
+form_glm  <- body_mass_g ~ lg_bill_length_std + lg_bill_depth_std +
+             lg_flipper_length_std + species + island + year + sex
+
+form_glmm_norm <- body_mass_g ~ lg_bill_length_std + lg_bill_depth_std + lg_flipper_length_std + island + year + sex +
+                  (1 | species)
+
+form_glmm_gamma <- form_glmm_norm
+```
+
+```{r}
+# CV function
+cv_model <- function(split, type){
+
+  train <- analysis(split)
+  test  <- assessment(split)
+
+  if(type == "glm"){
+    fit <- glmmTMB(form_glm,
+                   family = gaussian(link="log"),
+                   data = train)
+    pred <- predict(fit, newdata = test, type = "response")
+
+  } else if(type == "glmm_norm"){
+    fit <- glmmTMB(form_glmm_norm,
+                   family = gaussian(link="log"),
+                   data = train)
+    pred <- predict(fit, newdata = test, type = "response")
+
+  } else if(type == "glmm_gamma"){
+    fit <- glmmTMB(form_glmm_gamma,
+                   family = Gamma(link="log"),
+                   data = train)
+    pred <- predict(fit, newdata = test, type = "response")
+  }
+
+  mspe(test$body_mass_g, pred)
+}
+```
+
+```{r}
+glm_rmse  <- map_dbl(folds$splits, ~cv_model(.x, "glm"))
+norm_rmse <- map_dbl(folds$splits, ~cv_model(.x, "glmm_norm"))
+gamma_rmse<- map_dbl(folds$splits, ~cv_model(.x, "glmm_gamma"))
+```
+
+```{r}
+results <- tibble(
+  Model = c("GLM (Gaussian log, species fixed)",
+            "GLMM (Gaussian log)",
+            "GLMM (Gamma log)"),
+  MSPE  = c(mean(glm_rmse),
+            mean(norm_rmse),
+            mean(gamma_rmse)),
+  SD    = c(sd(glm_rmse),
+            sd(norm_rmse),
+            sd(gamma_rmse))
+)
+
+results
+```
+
+Cross-validation results show that all three models achieve nearly identical predictive performance (MSPE ≈ 290), indicating that neither the choice of Gaussian vs Gamma distribution nor the inclusion of species as a random effect substantially improves out-of-sample prediction accuracy. The GLMM with Gaussian errors exhibited slightly lower variability across folds, suggesting marginally more stable predictions, but no meaningful gain in predictive accuracy was observed.
+
+##  5. Conclusion
+
+In this analysis, we compared LM, GLM, and GLMM approaches to predict penguin body mass using morphological and demographic predictors. The GLM with a log link is particularly important from a scientific perspective because it reflects a biologically meaningful multiplicative relationship between body mass and predictors such as bill and flipper measurements. This log-scale formulation is consistent with allometric scaling patterns commonly observed in biological systems, where changes in morphology are associated with proportional rather than additive changes in body mass.
+
+The GLMM extends this framework by introducing a random intercept for species, allowing the model to account for hierarchical grouping in the data. The results show that species contributes meaningful baseline variation in body mass, indicating clear biological clustering even after controlling for morphological traits, sex, year, and island. However, despite capturing this structured variability, the GLMM does not substantially improve predictive performance compared to the GLM based on cross-validation results. This suggests that species-level variation is more important for interpretation and understanding of biological structure than for improving out-of-sample prediction in this dataset.
+
+Cross-validation results further indicate that all models perform very similarly in terms of prediction error, with nearly identical MSPE values. The GLMM with Gaussian errors showed slightly more stable performance across folds, while the Gamma model did not lead to measurable improvements in predictive accuracy. A key limitation of this evaluation is that standard K-fold cross-validation was used without stratification by species. Given the unbalanced nature of species representation, this may introduce bias in estimating generalization error and may underrepresent the true benefit of hierarchical modelling. Therefore, a stratified or leave-one-species-out cross-validation approach would provide a more rigorous assessment of GLMM performance in future work.
